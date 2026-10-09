@@ -15,6 +15,9 @@ struct proc *initproc;
 int nextpid = 1;
 struct spinlock pid_lock;
 
+// Set only for a user-invoked yield, so timer-driven yields do not print lab output.
+static int yield_info_pending = 0;
+
 extern void forkret(void);
 static void wakeup1(struct proc *chan);
 static void freeproc(struct proc *p);
@@ -267,10 +270,26 @@ int fork(void) {
   return pid;
 }
 
+// Convert a process state to the spelling required by the lab output.
+// Keep this separate from procdump(), whose strings contain padding spaces.
+static char *
+exit_state_name(enum procstate state)
+{
+  switch(state){
+  case UNUSED:   return "unused";
+  case SLEEPING: return "sleep";
+  case RUNNABLE: return "runble";
+  case RUNNING:  return "run";
+  case ZOMBIE:   return "zombie";
+  }
+  return "unknown";
+}
+
 // Pass p's abandoned children to init.
 // Caller must hold p->lock.
 void reparent(struct proc *p) {
   struct proc *pp;
+  int child_num = 0;
 
   for (pp = proc; pp < &proc[NPROC]; pp++) {
     // this code uses pp->parent without holding pp->lock.
@@ -281,6 +300,9 @@ void reparent(struct proc *p) {
       // pp->parent can't change between the check and the acquire()
       // because only the parent changes it, and we're the parent.
       acquire(&pp->lock);
+      exit_info("proc %d exit, child %d, pid %d, name %s, state %s\n",
+                p->pid, child_num++, pp->pid, pp->name,
+                exit_state_name(pp->state));
       pp->parent = initproc;
       // we should wake up init here, but that would require
       // initproc->lock, which would be a deadlock, since we hold
@@ -338,6 +360,10 @@ void exit(int status) {
 
   acquire(&p->lock);
 
+  exit_info("proc %d exit, parent pid %d, name %s, state %s\n",
+            p->pid, original_parent->pid, original_parent->name,
+            exit_state_name(original_parent->state));
+
   // Give any children to init.
   reparent(p);
 
@@ -355,8 +381,9 @@ void exit(int status) {
 }
 
 // Wait for a child process to exit and return its pid.
+// If flags is 1, return -1 instead of sleeping when no child is ready.
 // Return -1 if this process has no children.
-int wait(uint64 addr) {
+int wait(uint64 addr, int flags) {
   struct proc *np;
   int havekids, pid;
   struct proc *p = myproc();
@@ -400,6 +427,12 @@ int wait(uint64 addr) {
       return -1;
     }
 
+    // Non-blocking wait: children exist, but none has exited yet.
+    if (flags == 1) {
+      release(&p->lock);
+      return -1;
+    }
+
     // Wait for a child to exit.
     sleep(p, &p->lock);  // DOC: wait-sleep
   }
@@ -430,6 +463,11 @@ void scheduler(void) {
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        if (yield_info_pending) {
+          printf("Next runnable process pid is %d and user pc is %p\n",
+                 p->pid, p->trapframe->epc);
+          yield_info_pending = 0;
+        }
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
@@ -472,6 +510,23 @@ void sched(void) {
 void yield(void) {
   struct proc *p = myproc();
   acquire(&p->lock);
+  p->state = RUNNABLE;
+  sched();
+  release(&p->lock);
+}
+
+// Yield on behalf of the user-facing yield system call and print the
+// information required by the lab.
+void yield_with_info(void) {
+  struct proc *p = myproc();
+  uint64 start = (uint64)&p->context;
+
+  acquire(&p->lock);
+  printf("Save the context of the process to the memory region from address %p to %p\n",
+         start, start + sizeof(struct context));
+  printf("Current running process pid is %d and user pc is %p\n",
+         p->pid, p->trapframe->epc);
+  yield_info_pending = 1;
   p->state = RUNNABLE;
   sched();
   release(&p->lock);

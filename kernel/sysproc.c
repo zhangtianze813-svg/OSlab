@@ -18,10 +18,17 @@ uint64 sys_getpid(void) { return myproc()->pid; }
 
 uint64 sys_fork(void) { return fork(); }
 
+uint64 sys_yield(void) {
+  yield_with_info();
+  return 0;
+}
+
 uint64 sys_wait(void) {
   uint64 p;
+  int flags;
   if (argaddr(0, &p) < 0) return -1;
-  return wait(p);
+  if (argint(1, &flags) < 0) return -1;
+  return wait(p, flags);
 }
 
 uint64 sys_sbrk(void) {

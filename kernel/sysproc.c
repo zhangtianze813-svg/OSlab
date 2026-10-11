@@ -23,6 +23,49 @@ uint64 sys_yield(void) {
   return 0;
 }
 
+uint64 sys_seccomp_ctl(void) {
+  int op;
+  uint64 arg;
+  struct proc *p = myproc();
+
+  if (argint(0, &op) < 0 || argaddr(1, &arg) < 0)
+    return -1;
+
+  if (op == 0) {
+    p->seccomp_mask = arg;
+    p->seccomp_enabled = 1;
+    return 0;
+  }
+  if (op == 1) {
+    if (arg > NPROC)
+      return -1;
+    p->max_children = (int)arg;
+    return 0;
+  }
+  return -1;
+}
+
+uint64 sys_seccomp_getlog(void) {
+  uint64 buf_addr, len_addr;
+  int capacity, count;
+  struct proc *p = myproc();
+
+  if (argaddr(0, &buf_addr) < 0 || argaddr(1, &len_addr) < 0)
+    return -1;
+  if (copyin(p->pagetable, (char *)&capacity, len_addr, sizeof(capacity)) < 0)
+    return -1;
+  if (capacity < 0)
+    return -1;
+
+  count = capacity < p->audit_count ? capacity : p->audit_count;
+  if (count > 0 && copyout(p->pagetable, buf_addr, (char *)p->audit_log,
+                           count * sizeof(uint64)) < 0)
+    return -1;
+  if (copyout(p->pagetable, len_addr, (char *)&count, sizeof(count)) < 0)
+    return -1;
+  return 0;
+}
+
 uint64 sys_wait(void) {
   uint64 p;
   int flags;

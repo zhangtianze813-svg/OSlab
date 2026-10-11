@@ -99,6 +99,11 @@ static struct proc *allocproc(void) {
 
 found:
   p->pid = allocpid();
+  p->seccomp_mask = 0;
+  p->seccomp_enabled = 0;
+  p->audit_count = 0;
+  p->child_count = 0;
+  p->max_children = -1;
 
   // Allocate a trapframe page.
   if ((p->trapframe = (struct trapframe *)kalloc()) == 0) {
@@ -139,6 +144,11 @@ static void freeproc(struct proc *p) {
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  p->seccomp_mask = 0;
+  p->seccomp_enabled = 0;
+  p->audit_count = 0;
+  p->child_count = 0;
+  p->max_children = -1;
 }
 
 // Create a user page table for a given process,
@@ -233,8 +243,19 @@ int fork(void) {
   struct proc *np;
   struct proc *p = myproc();
 
+  acquire(&p->lock);
+  if (p->max_children >= 0 && p->child_count >= p->max_children) {
+    release(&p->lock);
+    return -1;
+  }
+  p->child_count++;
+  release(&p->lock);
+
   // Allocate process.
   if ((np = allocproc()) == 0) {
+    acquire(&p->lock);
+    p->child_count--;
+    release(&p->lock);
     return -1;
   }
 
@@ -242,11 +263,19 @@ int fork(void) {
   if (uvmcopy(p->pagetable, np->pagetable, p->sz) < 0) {
     freeproc(np);
     release(&np->lock);
+    acquire(&p->lock);
+    p->child_count--;
+    release(&p->lock);
     return -1;
   }
   np->sz = p->sz;
 
   np->parent = p;
+  np->seccomp_mask = p->seccomp_mask;
+  np->seccomp_enabled = p->seccomp_enabled;
+  np->max_children = p->max_children;
+  np->audit_count = 0;
+  np->child_count = 0;
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
@@ -413,6 +442,8 @@ int wait(uint64 addr, int flags) {
             return -1;
           }
           freeproc(np);
+          if (p->child_count > 0)
+            p->child_count--;
           release(&np->lock);
           release(&p->lock);
           return pid;

@@ -94,6 +94,14 @@ struct proc {
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
 
+  // Lightweight sandbox state.
+  uint64 seccomp_mask;         // Allowed syscall bits
+  int seccomp_enabled;         // Whether the allowlist is active
+  uint64 audit_log[32];        // Blocked syscall numbers
+  int audit_count;              // Number of valid audit entries
+  int child_count;             // Current number of children
+  int max_children;            // Maximum children; -1 means unlimited
+
   // these are private to the process, so p->lock need not be held.
   uint64 kstack;               // Virtual address of kernel stack
   uint64 sz;                   // Size of process memory (bytes)
